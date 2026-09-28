@@ -2,7 +2,10 @@ venv/
 __pycache__/
 *.pyc
 .idea/
-*.bin
-*.enc
+.vscode/
+
+# test artifacts
 test.txt
+test.enc
 test.dec
+*.openssl.dec
