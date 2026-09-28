@@ -1,0 +1,15 @@
+README.md
+setup.py
+cryptocore.egg-info/PKG-INFO
+cryptocore.egg-info/SOURCES.txt
+cryptocore.egg-info/dependency_links.txt
+cryptocore.egg-info/entry_points.txt
+cryptocore.egg-info/requires.txt
+cryptocore.egg-info/top_level.txt
+src/__init__.py
+src/cli_parser.py
+src/file_io.py
+src/modes/__init__.py
+src/modes/ecb.py
+tests/__init__.py
+tests/test_crypto.py

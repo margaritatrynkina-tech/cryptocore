@@ -1,0 +1,6 @@
+Metadata-Version: 2.1
+Name: cryptocore
+Version: 1.0.0
+Summary: CryptoCore - инструмент для шифрования/расшифрования файлов с использованием AES-128 ECB
+Author: Student
+Requires-Python: >=3.8
