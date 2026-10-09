@@ -39,23 +39,26 @@ def pkcs7_unpad(data: bytes) -> bytes:
 
     return data[:-padding_len]
 
-
 def encrypt_ecb(plaintext: bytes, key: bytes) -> bytes:
     if len(key) != KEY_SIZE:
         raise ValueError(
             f"Ключ должен быть {KEY_SIZE} байт (AES-128), получено {len(key)} байт"
         )
 
-    # Дополнить данные до кратности блоку
+    # 1. Дополнить данные до кратности блоку (PKCS#7)
     padded_data = pkcs7_pad(plaintext, BLOCK_SIZE)
 
-    # Создать шифр в режиме ECB
+    # 2. Создать AES-примитив (MODE_ECB в PyCryptodome = чистый примитив)
     cipher = AES.new(key, AES.MODE_ECB)
 
-    # Зашифровать
-    ciphertext = cipher.encrypt(padded_data)
+    # 3. Вручную разбить на блоки и зашифровать каждый по отдельности
+    output = bytearray()
+    for i in range(0, len(padded_data), BLOCK_SIZE):
+        block = padded_data[i:i + BLOCK_SIZE]
+        encrypted_block = cipher.encrypt(block)
+        output.extend(encrypted_block)
 
-    return ciphertext
+    return bytes(output)
 
 
 def decrypt_ecb(ciphertext: bytes, key: bytes) -> bytes:
@@ -73,12 +76,19 @@ def decrypt_ecb(ciphertext: bytes, key: bytes) -> bytes:
             f"получено {len(ciphertext)} байт"
         )
 
-    # Создать шифр в режиме ECB
+    # 1. Создать AES-примитив
     cipher = AES.new(key, AES.MODE_ECB)
 
-    # Расшифровать
-    padded_plaintext = cipher.decrypt(ciphertext)
+    # 2. Вручную разбить на блоки и расшифровать каждый
+    output = bytearray()
+    for i in range(0, len(ciphertext), BLOCK_SIZE):
+        block = ciphertext[i:i + BLOCK_SIZE]
+        decrypted_block = cipher.decrypt(block)
+        output.extend(decrypted_block)
 
+    # 3. Удалить padding
+    plaintext = pkcs7_unpad(bytes(output))
+    return plaintext
     # Удалить padding (с проверкой корректности)
     plaintext = pkcs7_unpad(padded_plaintext)
 

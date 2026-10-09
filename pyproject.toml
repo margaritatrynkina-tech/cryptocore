@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cryptocore"
+version = "0.1.0"
+description = "Minimalistic cryptographic provider (AES-128-ECB CLI)"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Ваше Имя", email = "your@email.com" },
+]
+dependencies = [
+    "pycryptodome>=3.19.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=5.0.0",
+]
+
+[project.scripts]
+cryptocore = "src.cli_parser:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

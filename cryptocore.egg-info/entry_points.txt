@@ -1,2 +1,0 @@
-[console_scripts]
-cryptocore = src.cli_parser:main

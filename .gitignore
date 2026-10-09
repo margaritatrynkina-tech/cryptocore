@@ -1,11 +1,21 @@
-venv/
-__pycache__/
-*.pyc
-.idea/
-.vscode/
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
 
-# test artifacts
-test.txt
-test.enc
-test.dec
-*.openssl.dec
+# Test artifacts
+test*.bin
+test*.txt
+test*.enc
+test*.dec
+our_*.bin
+openssl_*.bin
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Environment
+venv/
