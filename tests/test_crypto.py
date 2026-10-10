@@ -337,3 +337,333 @@ class TestIntegration:
             for path in [input_path, encrypted_path, decrypted_path]:
                 if os.path.exists(path):
                     os.unlink(path)
+import os
+from src.modes import get_mode
+
+
+# Common test data
+TEST_KEY = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
+TEST_KEY_ALT = bytes.fromhex("ff0102030405060708090a0b0c0d0e0f")
+TEST_IV = bytes.fromhex("00112233445566778899aabbccddeeff")
+TEST_IV_ALT = bytes.fromhex("ffeeddccbbaa99887766554433221100")
+
+
+class TestCBCMode:
+    def test_round_trip_short(self):
+        mode = get_mode("cbc")
+        pt = b"Hello, CBC!"
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    def test_round_trip_exact_block(self):
+        mode = get_mode("cbc")
+        pt = b"1234567890123456"  # exactly 16 bytes
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    def test_round_trip_empty(self):
+        mode = get_mode("cbc")
+        pt = b""
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        # With padding, even empty becomes 16 bytes
+        assert len(ct) == 16
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    @pytest.mark.parametrize("size", [1, 15, 16, 17, 31, 32, 100, 1000])
+    def test_round_trip_sizes(self, size):
+        mode = get_mode("cbc")
+        pt = bytes([i % 256 for i in range(size)])
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    def test_ciphertext_length_is_padded(self):
+        mode = get_mode("cbc")
+        pt = b"A" * 17
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        # 17 bytes + padding = 32 bytes (2 blocks)
+        assert len(ct) == 32
+        assert len(ct) % 16 == 0
+
+    def test_requires_iv(self):
+        mode = get_mode("cbc")
+        with pytest.raises(ValueError):
+            mode.encrypt(b"data", TEST_KEY, None)
+
+    def test_wrong_iv_length(self):
+        mode = get_mode("cbc")
+        with pytest.raises(ValueError):
+            mode.encrypt(b"data", TEST_KEY, b"short")
+
+    def test_different_iv_different_ciphertext(self):
+        mode = get_mode("cbc")
+        pt = b"Same plaintext"
+        ct1 = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        ct2 = mode.encrypt(pt, TEST_KEY, TEST_IV_ALT)
+        assert ct1 != ct2
+
+    def test_different_keys_different_ciphertext(self):
+        mode = get_mode("cbc")
+        pt = b"Same plaintext"
+        ct1 = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        ct2 = mode.encrypt(pt, TEST_KEY_ALT, TEST_IV)
+        assert ct1 != ct2
+
+    def test_same_iv_same_ciphertext(self):
+        mode = get_mode("cbc")
+        pt = b"Deterministic"
+        ct1 = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        ct2 = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert ct1 == ct2
+
+    def test_identical_blocks_different_ciphertext(self):
+        mode = get_mode("cbc")
+        pt = b"A" * 16 + b"A" * 16  # two identical blocks
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        block1 = ct[:16]
+        block2 = ct[16:32]
+        assert block1 != block2  # chaining makes them different
+
+
+class TestCFBMode:
+
+    def test_round_trip_short(self):
+        mode = get_mode("cfb")
+        pt = b"Hello, CFB!"
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    def test_round_trip_exact_block(self):
+        mode = get_mode("cfb")
+        pt = b"1234567890123456"
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    def test_round_trip_empty(self):
+        mode = get_mode("cfb")
+        pt = b""
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert ct == b""  # no padding
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    @pytest.mark.parametrize("size", [1, 7, 15, 16, 17, 31, 32, 100, 1000])
+    def test_round_trip_sizes(self, size):
+        mode = get_mode("cfb")
+        pt = bytes([i % 256 for i in range(size)])
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        # CFB does NOT pad: ciphertext length == plaintext length
+        assert len(ct) == size
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    def test_requires_iv(self):
+        mode = get_mode("cfb")
+        with pytest.raises(ValueError):
+            mode.encrypt(b"data", TEST_KEY, None)
+
+    def test_wrong_iv_length(self):
+        mode = get_mode("cfb")
+        with pytest.raises(ValueError):
+            mode.encrypt(b"data", TEST_KEY, b"short")
+
+    def test_different_iv_different_ciphertext(self):
+        mode = get_mode("cfb")
+        pt = b"Same plaintext"
+        ct1 = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        ct2 = mode.encrypt(pt, TEST_KEY, TEST_IV_ALT)
+        assert ct1 != ct2
+
+    def test_different_keys_different_ciphertext(self):
+        mode = get_mode("cfb")
+        pt = b"Same plaintext"
+        ct1 = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        ct2 = mode.encrypt(pt, TEST_KEY_ALT, TEST_IV)
+        assert ct1 != ct2
+
+
+class TestOFBMode:
+
+    def test_round_trip_short(self):
+        mode = get_mode("ofb")
+        pt = b"Hello, OFB!"
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    def test_round_trip_exact_block(self):
+        mode = get_mode("ofb")
+        pt = b"1234567890123456"
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    def test_round_trip_empty(self):
+        mode = get_mode("ofb")
+        pt = b""
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert ct == b""
+
+    @pytest.mark.parametrize("size", [1, 7, 15, 16, 17, 31, 32, 100, 1000])
+    def test_round_trip_sizes(self, size):
+        mode = get_mode("ofb")
+        pt = bytes([i % 256 for i in range(size)])
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert len(ct) == size
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    def test_symmetric(self):
+        mode = get_mode("ofb")
+        pt = b"Test message!"
+        a = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        b = mode.decrypt(pt, TEST_KEY, TEST_IV)
+        assert a == b
+
+    def test_requires_iv(self):
+        mode = get_mode("ofb")
+        with pytest.raises(ValueError):
+            mode.encrypt(b"data", TEST_KEY, None)
+
+    def test_wrong_iv_length(self):
+        mode = get_mode("ofb")
+        with pytest.raises(ValueError):
+            mode.encrypt(b"data", TEST_KEY, b"short")
+
+    def test_different_iv_different_ciphertext(self):
+        mode = get_mode("ofb")
+        pt = b"Same plaintext"
+        ct1 = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        ct2 = mode.encrypt(pt, TEST_KEY, TEST_IV_ALT)
+        assert ct1 != ct2
+
+    def test_different_keys_different_ciphertext(self):
+        mode = get_mode("ofb")
+        pt = b"Same plaintext"
+        ct1 = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        ct2 = mode.encrypt(pt, TEST_KEY_ALT, TEST_IV)
+        assert ct1 != ct2
+
+
+class TestCTRMode:
+    def test_round_trip_short(self):
+        mode = get_mode("ctr")
+        pt = b"Hello, CTR!"
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    def test_round_trip_exact_block(self):
+        mode = get_mode("ctr")
+        pt = b"1234567890123456"
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    def test_round_trip_empty(self):
+        mode = get_mode("ctr")
+        pt = b""
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert ct == b""
+
+    @pytest.mark.parametrize("size", [1, 7, 15, 16, 17, 31, 32, 100, 1000])
+    def test_round_trip_sizes(self, size):
+        mode = get_mode("ctr")
+        pt = bytes([i % 256 for i in range(size)])
+        ct = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        assert len(ct) == size
+        assert mode.decrypt(ct, TEST_KEY, TEST_IV) == pt
+
+    def test_symmetric(self):
+        mode = get_mode("ctr")
+        pt = b"Test message!"
+        a = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        b = mode.decrypt(pt, TEST_KEY, TEST_IV)
+        assert a == b
+
+    def test_requires_iv(self):
+        mode = get_mode("ctr")
+        with pytest.raises(ValueError):
+            mode.encrypt(b"data", TEST_KEY, None)
+
+    def test_wrong_iv_length(self):
+        mode = get_mode("ctr")
+        with pytest.raises(ValueError):
+            mode.encrypt(b"data", TEST_KEY, b"short")
+
+    def test_different_iv_different_ciphertext(self):
+        mode = get_mode("ctr")
+        pt = b"Same plaintext"
+        ct1 = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        ct2 = mode.encrypt(pt, TEST_KEY, TEST_IV_ALT)
+        assert ct1 != ct2
+
+    def test_different_keys_different_ciphertext(self):
+        mode = get_mode("ctr")
+        pt = b"Same plaintext"
+        ct1 = mode.encrypt(pt, TEST_KEY, TEST_IV)
+        ct2 = mode.encrypt(pt, TEST_KEY_ALT, TEST_IV)
+        assert ct1 != ct2
+
+    def test_ctr_differs_from_ofb_on_multiblock(self):
+        ctr = get_mode("ctr")
+        ofb = get_mode("ofb")
+        pt = b"A" * 32  # two blocks
+        ct_ctr = ctr.encrypt(pt, TEST_KEY, bytes(16))
+        ct_ofb = ofb.encrypt(pt, TEST_KEY, bytes(16))
+        assert ct_ctr != ct_ofb
+
+    def test_increment_counter_basic(self):
+        from src.modes.ctr import _increment_counter
+        assert _increment_counter(bytes(16)) == b"\x00" * 15 + b"\x01"
+        assert _increment_counter(b"\x00" * 15 + b"\xff") == b"\x00" * 14 + b"\x01\x00"
+
+    def test_increment_counter_wraps(self):
+        from src.modes.ctr import _increment_counter
+        assert _increment_counter(b"\xff" * 16) == bytes(16)
+
+
+class TestModeRegistry:
+
+    def test_all_modes_registered(self):
+        from src.modes import MODES
+        assert set(MODES.keys()) == {"ecb", "cbc", "cfb", "ofb", "ctr"}
+
+    def test_get_mode_returns_instance(self):
+        for name in ["ecb", "cbc", "cfb", "ofb", "ctr"]:
+            mode = get_mode(name)
+            assert mode.name == name
+            assert isinstance(mode.needs_iv, bool)
+            assert isinstance(mode.needs_padding, bool)
+
+    def test_unknown_mode_raises(self):
+        with pytest.raises(ValueError):
+            get_mode("xyz")
+
+    def test_iv_requirements(self):
+        assert get_mode("ecb").needs_iv is False
+        assert get_mode("cbc").needs_iv is True
+        assert get_mode("cfb").needs_iv is True
+        assert get_mode("ofb").needs_iv is True
+        assert get_mode("ctr").needs_iv is True
+
+    def test_padding_requirements(self):
+        assert get_mode("ecb").needs_padding is True
+        assert get_mode("cbc").needs_padding is True
+        assert get_mode("cfb").needs_padding is False
+        assert get_mode("ofb").needs_padding is False
+        assert get_mode("ctr").needs_padding is False
+
+
+class TestCrossModeConsistency:
+
+    @pytest.mark.parametrize("mode_name", ["ecb", "cbc", "cfb", "ofb", "ctr"])
+    def test_round_trip_consistency(self, mode_name):
+        """Every mode must round-trip correctly."""
+        mode = get_mode(mode_name)
+        iv = TEST_IV if mode.needs_iv else None
+        for size in [0, 1, 15, 16, 17, 100]:
+            pt = bytes([(i * 7) % 256 for i in range(size)])
+            ct = mode.encrypt(pt, TEST_KEY, iv)
+            assert mode.decrypt(ct, TEST_KEY, iv) == pt
+
+    @pytest.mark.parametrize("mode_name", ["ecb", "cbc", "cfb", "ofb", "ctr"])
+    def test_ciphertext_differs_from_plaintext(self, mode_name):
+        mode = get_mode(mode_name)
+        iv = TEST_IV if mode.needs_iv else None
+        pt = b"This is a secret message that should not appear in ciphertext."
+        ct = mode.encrypt(pt, TEST_KEY, iv)
+        # Very unlikely (but possible in theory) that ct == pt
+        assert ct != pt

@@ -45,6 +45,7 @@ CryptoCore реализует базовые операции блочного �
 ## Использование
 
 - Шифрование файла
+IV генерируется автоматически и записывается в начало выходного файла.
    ```bash
    cryptocore --algorithm aes --mode ecb --encrypt \
     --key 000102030405060708090a0b0c0d0e0f \
@@ -53,21 +54,49 @@ CryptoCore реализует базовые операции блочного �
   ```
 
 - Расшифрование файла
+По умолчанию IV читается из первых 16 байт входного файла:
    ```bash
   cryptocore --algorithm aes --mode ecb --decrypt \
     --key 000102030405060708090a0b0c0d0e0f \
     --input ciphertext.bin \
-    --output decrypted.txt```
-  - Аргументы командной строки
-     ```bash
-     --algorithm         #Алгоритм шифрования (поддерживается: aes)
-     --mode              #Режим работы шифра (поддерживается: ecb)
-     --encrypt           #Режим шифрования (взаимоисключающий с --decrypt)
-     --decrypt           #Режим расшифрования (взаимоисключающий с --encrypt)
-     --key               #Ключ в hex-формате (32 hex-символа = 16 байт для AES-128)
-     --input             #Путь к входному файлу
-     --output            #Путь к выходному файлу
+    --output decrypted.txt
   ```
+-  Поддерживаемые режимы
+```bash
+| Режим | Padding | IV | Особенности |
+|---|---|---|---|
+| `ecb` | PKCS#7 | Не нужен | Небезопасен, для учебных целей |
+| `cbc` | PKCS#7 | Обязателен | Цепочка блоков |
+| `cfb` | Не нужен | Обязателен | Потоковый, 128-битный сегмент |
+| `ofb` | Не нужен | Обязателен | Потоковый, симметричен |
+| `ctr` | Не нужен | Обязателен | Потоковый, счётчик, симметричен |
+```
+
+- Аргументы командной строки
+```bash
+| Аргумент | Описание |
+|---|---|
+| `--algorithm` | Алгоритм шифрования (поддерживается: `aes`) |
+| `--mode` | Режим работы: `ecb`, `cbc`, `cfb`, `ofb`, `ctr` |
+| `--encrypt` | Режим шифрования (взаимоисключающий с `--decrypt`) |
+| `--decrypt` | Режим расшифрования (взаимоисключающий с `--encrypt`) |
+| `--key` | Ключ в hex-формате (32 hex-символа = 16 байт для AES-128) |
+| `--iv` | IV в hex-формате (32 hex-символа). **Только при расшифровании.** Если не задан — читается из первых 16 байт файла |
+| `--input` | Путь к входному файлу |
+| `--output` | Путь к выходному файлу (опционально) |
+```
+ 
+- Формат файла
+При шифровании выходной файл имеет формат:
+
+```
+<16 байт IV><шифротекст>
+```
+
+- **IV** — первые 16 байт (открыто, не секрет)
+- **Шифротекст** — остальное
+
+Для ECB (не требует IV) файл состоит только из шифротекста.
 
 ## Тестирование и верификация
 
@@ -76,65 +105,99 @@ CryptoCore реализует базовые операции блочного �
     ```bash
     python -m pytest tests/ -v
    ```
-   
+Покрывает: PKCS#7, ECB, CBC, CFB, OFB, CTR, реестр режимов, файловый I/O.
 
 2. Проверка полного цикла (Round-trip)
 Вы можете проверить, что файл после шифрования и последующего расшифрования полностью идентичен исходному:
     Чтобы убедиться в математической корректности нашей ручной реализации режима ECB и PKCS#7, мы сравниваем результат с утилитой openssl.
     ```bash
-   # Создаем тестовый файл
-    python -c "open('test.txt', 'wb').write(b'Hello, CryptoCore!')"
+       # Создаём тестовый файл
+    python -c "open('test.txt', 'wb').write(b'Hello, CryptoCore modes!')"
     
-    
-    # Шифруем
-    cryptocore --algorithm aes --mode ecb --encrypt \
-        --key 000102030405060708090a0b0c0d0e0f \
-        --input test.txt --output test.enc
-    
-    # Расшифровываем
-    cryptocore --algorithm aes --mode ecb --decrypt \
-        --key 000102030405060708090a0b0c0d0e0f \
-        --input test.enc --output test.dec
-    
-    # Сравниваем хеш-суммы (значения Hash должны абсолютно совпадать)
-    Get-FileHash test.txt
-    Get-FileHash test.dec
-   ```
+    # Прогоняем каждый режим
+    for mode in ecb cbc cfb ofb ctr:
+        cryptocore --algorithm aes --mode $mode --encrypt --key 000102030405060708090a0b0c0d0e0f --input test.txt --output test_$mode.enc
+        cryptocore --algorithm aes --mode $mode --decrypt --key 000102030405060708090a0b0c0d0e0f --input test_$mode.enc --output test_$mode.dec
+    ```
+Каждый расшифрованный файл должен совпадать с `test.txt`.
+   
 
 3. Сверка с эталонной реализацией OpenSSL
-Чтобы убедиться в математической корректности нашей ручной реализации режима ECB и PKCS#7, мы сравниваем результат с утилитой openssl.
-    ```bash
-    # 1. Создаем файл ровно из 16 байт
-    python -c "open('test16.bin', 'wb').write(b'0123456789ABCDEF')"
-    
-    # 2. Шифруем НАШИМ инструментом
-    cryptocore --algorithm aes --mode ecb --encrypt \
-        --key 000102030405060708090a0b0c0d0e0f \
-        --input test16.bin --output our_enc.bin
-    
-    # 3. Шифруем через OpenSSL (отключаем соль и padding)
-    python -c "import subprocess; subprocess.run(['openssl', 'enc', '-aes-128-ecb', '-K', '000102030405060708090a0b0c0d0e0f', '-nosalt', '-nopad', '-in', 'test16.bin', '-out', 'openssl_enc.bin'])"
-    
-    # 4. Сравниваем хеш-суммы (они ДОЛЖНЫ быть абсолютно одинаковыми, что доказывает корректность реализации)
-    Get-FileHash our_enc.bin
-    Get-FileHash openssl_enc.bin
-   ```
+
+#### CBC (наш инструмент → OpenSSL)
+
+```bash
+# 1. Шифруем нашим инструментом
+cryptocore --algorithm aes --mode cbc --encrypt \
+    --key 000102030405060708090a0b0c0d0e0f \
+    --input plain.txt --output cipher.bin
+# В выводе видим: IV (hex): aabbccdd...
+
+# 2. Извлекаем IV (первые 16 байт) и шифротекст (остальное)
+python -c "
+import sys
+data = open('cipher.bin','rb').read()
+open('iv.bin','wb').write(data[:16])
+open('ct.bin','wb').write(data[16:])
+print('IV:', data[:16].hex())
+"
+
+# 3. Расшифровываем через OpenSSL
+openssl enc -aes-128-cbc -d \
+    -K 000102030405060708090a0b0c0d0e0f \
+    -iv <IV_из_вывода_выше> \
+    -in ct.bin -out decrypted.txt
+
+# 4. Сверяем
+diff plain.txt decrypted.txt  # должно быть пусто
+```
+
+#### OpenSSL → наш инструмент
+
+```bash
+# 1. Шифруем через OpenSSL
+openssl enc -aes-128-cbc \
+    -K 000102030405060708090a0b0c0d0e0f \
+    -iv AABBCCDDEEFF00112233445566778899 \
+    -in plain.txt -out openssl_cipher.bin
+
+# 2. Расшифровываем нашим инструментом
+cryptocore --algorithm aes --mode cbc --decrypt \
+    --key 000102030405060708090a0b0c0d0e0f \
+    --iv AABBCCDDEEFF00112233445566778899 \
+    --input openssl_cipher.bin --output decrypted.txt
+
+# 3. Сверяем
+diff plain.txt decrypted.txt  # должно быть пусто
+```
+
+**Аналогично для `cfb`, `ofb`, `ctr`** — просто замените `cbc` на имя режима в командах.
+
+> **Примечание про OpenSSL:** для потоковых режимов (CFB, OFB, CTR) OpenSSL не добавляет padding, поэтому флаги `-nopad` не нужны. Для CBC — OpenSSL добавляет padding автоматически, что совпадает с нашей реализацией.
    
 
 ## Структура проекта
     ```bash
     cryptocore/
     ├── src/
-    │ ├── __init__.py
-    │ ├── cli_parser.py                # Парсер аргументов командной строки
-    │ ├── file_io.py                   # Бинарный файловый ввод-вывод с обработкой ошибок
-    │ └── modes/
-    │ ├── __init__.py
-    │ └── ecb.py                       # Ручной AES-128 ECB + PKCS#7 padding
+    │   ├── __init__.py
+    │   ├── cli_parser.py            # CLI: парсинг аргументов + main
+    │   ├── file_io.py               # Чтение/запись файлов, дефолтные имена
+    │   └── modes/
+    │       ├── __init__.py          # Реестр режимов + get_mode()
+    │       ├── base.py              # ModeBase, pkcs7_pad/unpad, BLOCK_SIZE, KEY_SIZE
+    │       ├── ecb.py               # ECBMode (ручной, с padding)
+    │       ├── cbc.py               # CBCMode (цепочка + padding)
+    │       ├── cfb.py               # CFBMode (потоковый, 128-битный сегмент)
+    │       ├── ofb.py               # OFBMode (потоковый, симметричен)
+    │       └── ctr.py               # CTRMode (потоковый, счётчик)
     ├── tests/
-    │ ├── __init__.py
-    │ └── test_crypto.py               # Модульные и интеграционные тесты
-    ├── pyproject.toml                 # Метаданные пакета и зависимости
-    ├── requirements.txt               # Runtime-зависимости (справочно)
-    └── README.md                      # Этот файл
+    │   ├── __init__.py
+    │   └── test_crypto.py           # 122 теста (все режимы + padding + I/O)
+    ├── tools/
+    │   └── render_readme.py         # Скрипт для локального preview README
+    ├── pyproject.toml               # Метаданные + зависимости (runtime / dev)
+    ├── requirements.txt             # Runtime-зависимости (справочно)
+    ├── README.md                    # Документация
+    └── .gitignore
     ```
