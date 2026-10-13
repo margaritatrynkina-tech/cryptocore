@@ -24,3 +24,6 @@ htmlcov/
 
 # Environment
 venv/
+
+# NIST test data
+nist_test_data.bin

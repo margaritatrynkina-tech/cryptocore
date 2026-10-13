@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
+from src.csprng import generate_iv, generate_key
 from src.file_io import read_file, write_file, get_default_output_path
 from src.modes import get_mode
 from src.modes.base import BLOCK_SIZE, KEY_SIZE
 
+
 def parse_hex_key(hex_string: str) -> bytes:
-    """Convert hex string to bytes, with a friendly error message."""
     try:
         return bytes.fromhex(hex_string.strip())
     except ValueError:
@@ -33,7 +33,6 @@ def validate_key_length(key_bytes: bytes) -> None:
 
 
 def parse_hex_iv(hex_string: str) -> bytes:
-    """Convert hex string to 16-byte IV, with a friendly error message."""
     try:
         iv = bytes.fromhex(hex_string.strip())
     except ValueError:
@@ -55,6 +54,34 @@ def parse_hex_iv(hex_string: str) -> bytes:
     return iv
 
 
+def is_weak_key(key: bytes) -> tuple[bool, str]:
+    if len(key) == 0:
+        return True, "пустой ключ"
+
+    # All bytes identical (all zeros, all 0xFF, etc.)
+    if len(set(key)) == 1:
+        return True, f"все байты одинаковые (0x{key[0]:02x})"
+
+    # Sequential bytes (00 01 02 ... or ff fe fd ...)
+    is_ascending = all((key[i + 1] - key[i]) % 256 == 1 for i in range(len(key) - 1))
+    is_descending = all((key[i] - key[i + 1]) % 256 == 1 for i in range(len(key) - 1))
+    if is_ascending or is_descending:
+        return True, "байты идут последовательно"
+
+    return False, ""
+
+
+def warn_if_weak_key(key: bytes) -> None:
+    weak, reason = is_weak_key(key)
+    if weak:
+        print(
+            f"Предупреждение: ключ выглядит слабым ({reason}). "
+            f"Для реального использования сгенерируйте случайный ключ "
+            f"(не передавайте --key при шифровании).",
+            file=sys.stderr,
+        )
+
+
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cryptocore",
@@ -62,8 +89,12 @@ def create_parser() -> argparse.ArgumentParser:
         epilog=(
             "Пример: cryptocore --algorithm aes --mode cbc --encrypt "
             "--key 000102030405060708090a0b0c0d0e0f "
+            "--input plaintext.txt --output ciphertext.bin\n"
+            "Пример без --key (ключ генерируется автоматически): "
+            "cryptocore --algorithm aes --mode cbc --encrypt "
             "--input plaintext.txt --output ciphertext.bin"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
     parser.add_argument(
@@ -86,15 +117,20 @@ def create_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--key",
-        required=True,
-        help=f"Ключ в hex-формате ({KEY_SIZE * 2} hex-символов = {KEY_SIZE} байт)",
+        default=None,
+        help=(
+            f"Ключ в hex-формате ({KEY_SIZE * 2} hex-символов). "
+            f"При шифровании необязателен: если не задан, "
+            f"ключ генерируется и выводится в stdout. "
+            f"При расшифровании обязателен."
+        ),
     )
 
     parser.add_argument(
         "--iv",
         default=None,
         help=(
-            f"IV в hex-формате ({BLOCK_SIZE * 2} hex-символов = {BLOCK_SIZE} байт). "
+            f"IV в hex-формате ({BLOCK_SIZE * 2} hex-символов). "
             "Используется только при расшифровании. "
             "Если не задан — IV читается из первых 16 байт входного файла."
         ),
@@ -115,17 +151,39 @@ def create_parser() -> argparse.ArgumentParser:
 
     return parser
 
+
 def main() -> None:
     parser = create_parser()
     args = parser.parse_args()
 
-    key_bytes = parse_hex_key(args.key)
-    validate_key_length(key_bytes)
+    if args.encrypt:
+        if args.key is not None:
+            # CLI-2: use key as provided
+            key_bytes = parse_hex_key(args.key)
+            validate_key_length(key_bytes)
+            warn_if_weak_key(key_bytes)
+        else:
+            # CLI-3: generate a random key and print it
+            key_bytes = generate_key(KEY_SIZE)
+            print(f"Сгенерирован случайный ключ: {key_bytes.hex()}")
+    else:
+        # CLI-4: decryption always requires --key
+        if args.key is None:
+            print(
+                "Ошибка: для расшифрования необходимо указать --key "
+                "(ключ нельзя сгенерировать — он должен совпадать "
+                "с ключом, использованным при шифровании).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        key_bytes = parse_hex_key(args.key)
+        validate_key_length(key_bytes)
+        # No weak-key warning on decryption — user might legitimately
+        # be decrypting with a test key.
 
     mode = get_mode(args.mode)
-    iv_from_cli: bytes | None = None
 
-    # --iv is only allowed when decrypting (CLI-3)
+    iv_from_cli: bytes | None = None
     if args.iv is not None:
         if args.encrypt:
             print(
@@ -145,13 +203,10 @@ def main() -> None:
     try:
         if args.encrypt:
             # Generate random IV if the mode requires it
-            iv = os.urandom(BLOCK_SIZE) if mode.needs_iv else None
+            iv = generate_iv() if mode.needs_iv else None
             ciphertext = mode.encrypt(input_data, key_bytes, iv)
 
-            if iv is not None:
-                output_data = iv + ciphertext          # IV-2: IV first
-            else:
-                output_data = ciphertext
+            output_data = (iv + ciphertext) if iv is not None else ciphertext
 
             write_file(output_path, output_data)
             print(f"Зашифровано: {args.input_file} -> {output_path}")
@@ -160,7 +215,6 @@ def main() -> None:
                 print(f"IV (hex): {iv.hex()}")
 
         else:
-            # Decryption
             if mode.needs_iv:
                 if iv_from_cli is not None:
                     iv = iv_from_cli
