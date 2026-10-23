@@ -126,11 +126,62 @@ cryptocore --algorithm aes --mode cbc --decrypt \
 
 Для ECB (не требует IV) файл состоит только из шифротекста.
 
+### Хеширование файлов (`dgst`)
+
+Для вычисления контрольных сумм (message digest) используется отдельная подкоманда `dgst`. Она не требует ключей и режимов шифрования.
+
+**Базовое вычисление хеша:**
+
+```bash
+cryptocore dgst --algorithm sha256 --input document.pdf
+```
+
+Вывод соответствует формату классических `*sum`-утилит:
+```text
+5d5b09f6dcb2d53a5fffc60c4ac0d55fb052072fa2fe5d95f011b5d5d5b0b0b5  document.pdf
+```
+
+**Запись хеша в файл** (флаг `--output`):
+
+```bash
+cryptocore dgst --algorithm sha3-256 --input backup.tar --output backup.sha3
+```
+
+**Поддерживаемые алгоритмы:**
+
+| Алгоритм | Реализация | Особенности |
+|---|---|---|
+| `sha256` | **С нуля** (NIST FIPS 180-4) | Merkle–Damgård, 512-битные блоки, 64 раунда |
+| `sha3-256` | Через `hashlib` | Согласно HASH-3 (стандартная библиотека) |
+
+**Технические детали:**
+- Входной файл читается **бинарно** (`'rb'`) блоками по 8 КБ (постоянное потребление памяти — IO-2)
+- Для пустого файла `sha256` возвращает `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+- SHA-256 реализован вручную: `src/hash/sha256.py` (константы K, H, ротации, раундовая функция)
+
+**Пример проверки совместимости:**
+
+```bash
+# Наш инструмент
+cryptocore dgst --algorithm sha256 --input large_file.iso > my_hash.txt
+
+# Системная утилита (Linux/macOS)
+sha256sum large_file.iso > system_hash.txt
+
+# Различий быть не должно
+diff my_hash.txt system_hash.txt
+```
+
+> **Примечание для Windows:** команда `sha256sum` встроена в Git Bash. В PowerShell можно использовать:
+> ```powershell
+> Get-FileHash large_file.iso -Algorithm SHA256
+> ```
+> 
 ## Тестирование и верификация
 
 1. Запуск автоматических тестов
-Проект покрыт модульными и интеграционными тестами (проверка PKCS#7 padding, шифрования, файлового I/O). Для их запуска выполните:
-    ```bash
+Покрывает: PKCS#7, ECB, CBC, CFB, OFB, CTR, реестр режимов, файловый I/O, CSPRNG (включая 1000 уникальных ключей), SHA-256 (NIST-векторы, лавинный эффект), SHA3-256.
+```bash
     python -m pytest tests/ -v
    ```
 Покрывает: PKCS#7, ECB, CBC, CFB, OFB, CTR, реестр режимов, файловый I/O.
@@ -260,17 +311,24 @@ python tools/generate_nist_data.py 10
     │   ├── __init__.py
     │   ├── cli_parser.py            # CLI: парсинг аргументов + main
     │   ├── file_io.py               # Чтение/запись файлов, дефолтные имена
+    │   ├── csprng.py                # CSPRNG (os.urandom)
     │   └── modes/
-    │       ├── __init__.py          # Реестр режимов + get_mode()
-    │       ├── base.py              # ModeBase, pkcs7_pad/unpad, BLOCK_SIZE, KEY_SIZE
-    │       ├── ecb.py               # ECBMode (ручной, с padding)
-    │       ├── cbc.py               # CBCMode (цепочка + padding)
-    │       ├── cfb.py               # CFBMode (потоковый, 128-битный сегмент)
-    │       ├── ofb.py               # OFBMode (потоковый, симметричен)
-    │       └── ctr.py               # CTRMode (потоковый, счётчик)
+    │   │   ├── __init__.py          # Реестр режимов + get_mode()
+    │   │   ├── base.py              # ModeBase, pkcs7_pad/unpad, BLOCK_SIZE, KEY_SIZE
+    │   │   ├── ecb.py               # ECBMode (ручной, с padding)
+    │   │   ├── cbc.py               # CBCMode (цепочка + padding)
+    │   │   ├── cfb.py               # CFBMode (потоковый, 128-битный сегмент)
+    │   │   ├── ofb.py               # OFBMode (потоковый, симметричен)
+    │   │   └── ctr.py               # CTRMode (потоковый, счётчик)
+    │   ├── hash/
+    │   │   ├── __init__.py          # Реестр алгоритмов
+    │   │   ├── sha256.py            # SHA-256 с нуля (FIPS 180-4)
+    │   │   └── sha3_256.py          # SHA3-256 (через hashlib)
     ├── tests/
     │   ├── __init__.py
-    │   └── test_crypto.py           # 122 теста (все режимы + padding + I/O)
+    │   ├── test_crypto.py           # 122 теста (все режимы + padding + I/O)
+    │   ├── test_csprng.py           # CSPRNG (Sprint 3)
+    │   └── test_hash.py             # Хеши (Sprint 4)
     ├── tools/
     │   └── render_readme.py         # Скрипт для локального preview README
     ├── pyproject.toml               # Метаданные + зависимости (runtime / dev)

@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from src.hash import get_hasher
 import argparse
 import sys
 
@@ -153,99 +153,143 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "dgst":
+        main_dgst(sys.argv[2:])
+        return
+
     parser = create_parser()
     args = parser.parse_args()
 
     if args.encrypt:
-        if args.key is not None:
-            # CLI-2: use key as provided
+
+        if args.encrypt:
+            if args.key is not None:
+                # CLI-2: use key as provided
+                key_bytes = parse_hex_key(args.key)
+                validate_key_length(key_bytes)
+                warn_if_weak_key(key_bytes)
+            else:
+                # CLI-3: generate a random key and print it
+                key_bytes = generate_key(KEY_SIZE)
+                print(f"Сгенерирован случайный ключ: {key_bytes.hex()}")
+        else:
+            # CLI-4: decryption always requires --key
+            if args.key is None:
+                print(
+                    "Ошибка: для расшифрования необходимо указать --key "
+                    "(ключ нельзя сгенерировать — он должен совпадать "
+                    "с ключом, использованным при шифровании).",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             key_bytes = parse_hex_key(args.key)
             validate_key_length(key_bytes)
-            warn_if_weak_key(key_bytes)
-        else:
-            # CLI-3: generate a random key and print it
-            key_bytes = generate_key(KEY_SIZE)
-            print(f"Сгенерирован случайный ключ: {key_bytes.hex()}")
-    else:
-        # CLI-4: decryption always requires --key
-        if args.key is None:
-            print(
-                "Ошибка: для расшифрования необходимо указать --key "
-                "(ключ нельзя сгенерировать — он должен совпадать "
-                "с ключом, использованным при шифровании).",
-                file=sys.stderr,
-            )
+            # No weak-key warning on decryption — user might legitimately
+            # be decrypting with a test key.
+
+        mode = get_mode(args.mode)
+
+        iv_from_cli: bytes | None = None
+        if args.iv is not None:
+            if args.encrypt:
+                print(
+                    "Ошибка: --iv не должен использоваться при шифровании "
+                    "(IV генерируется автоматически).",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            iv_from_cli = parse_hex_iv(args.iv)
+
+        output_path = args.output_file or get_default_output_path(
+            args.input_file, encrypt=args.encrypt
+        )
+
+        input_data = read_file(args.input_file)
+
+        try:
+            if args.encrypt:
+                # Generate random IV if the mode requires it
+                iv = generate_iv() if mode.needs_iv else None
+                ciphertext = mode.encrypt(input_data, key_bytes, iv)
+
+                output_data = (iv + ciphertext) if iv is not None else ciphertext
+
+                write_file(output_path, output_data)
+                print(f"Зашифровано: {args.input_file} -> {output_path}")
+                print(f"Режим: {mode.name.upper()}")
+                if iv is not None:
+                    print(f"IV (hex): {iv.hex()}")
+
+            else:
+                if mode.needs_iv:
+                    if iv_from_cli is not None:
+                        iv = iv_from_cli
+                        ciphertext = input_data
+                    else:
+                        if len(input_data) < BLOCK_SIZE:
+                            print(
+                                f"Ошибка: входной файл слишком короткий "
+                                f"({len(input_data)} байт), не содержит IV "
+                                f"(нужно минимум {BLOCK_SIZE} байт).",
+                                file=sys.stderr,
+                            )
+                            sys.exit(1)
+                        iv = input_data[:BLOCK_SIZE]
+                        ciphertext = input_data[BLOCK_SIZE:]
+                else:
+                    iv = None
+                    ciphertext = input_data
+
+                plaintext = mode.decrypt(ciphertext, key_bytes, iv)
+                write_file(output_path, plaintext)
+                print(f"Расшифровано: {args.input_file} -> {output_path}")
+                print(f"Режим: {mode.name.upper()}")
+
+        except ValueError as e:
+            print(f"Ошибка криптографии: {e}", file=sys.stderr)
             sys.exit(1)
-        key_bytes = parse_hex_key(args.key)
-        validate_key_length(key_bytes)
-        # No weak-key warning on decryption — user might legitimately
-        # be decrypting with a test key.
-
-    mode = get_mode(args.mode)
-
-    iv_from_cli: bytes | None = None
-    if args.iv is not None:
-        if args.encrypt:
-            print(
-                "Ошибка: --iv не должен использоваться при шифровании "
-                "(IV генерируется автоматически).",
-                file=sys.stderr,
-            )
+        except Exception as e:
+            print(f"Неожиданная ошибка: {e}", file=sys.stderr)
             sys.exit(1)
-        iv_from_cli = parse_hex_iv(args.iv)
 
-    output_path = args.output_file or get_default_output_path(
-        args.input_file, encrypt=args.encrypt
+def main_dgst(args_list: list[str]) -> None:
+    parser = argparse.ArgumentParser(
+        prog="cryptocore dgst",
+        description="Вычислить хеш файла",
     )
+    parser.add_argument("--algorithm", required=True, choices=["sha256", "sha3-256"])
+    parser.add_argument("--input", required=True, dest="input_file")
+    parser.add_argument("--output", default=None)
 
-    input_data = read_file(args.input_file)
+    args = parser.parse_args(args_list)
+
+    hasher = get_hasher(args.algorithm)
 
     try:
-        if args.encrypt:
-            # Generate random IV if the mode requires it
-            iv = generate_iv() if mode.needs_iv else None
-            ciphertext = mode.encrypt(input_data, key_bytes, iv)
-
-            output_data = (iv + ciphertext) if iv is not None else ciphertext
-
-            write_file(output_path, output_data)
-            print(f"Зашифровано: {args.input_file} -> {output_path}")
-            print(f"Режим: {mode.name.upper()}")
-            if iv is not None:
-                print(f"IV (hex): {iv.hex()}")
-
-        else:
-            if mode.needs_iv:
-                if iv_from_cli is not None:
-                    iv = iv_from_cli
-                    ciphertext = input_data
-                else:
-                    if len(input_data) < BLOCK_SIZE:
-                        print(
-                            f"Ошибка: входной файл слишком короткий "
-                            f"({len(input_data)} байт), не содержит IV "
-                            f"(нужно минимум {BLOCK_SIZE} байт).",
-                            file=sys.stderr,
-                        )
-                        sys.exit(1)
-                    iv = input_data[:BLOCK_SIZE]
-                    ciphertext = input_data[BLOCK_SIZE:]
-            else:
-                iv = None
-                ciphertext = input_data
-
-            plaintext = mode.decrypt(ciphertext, key_bytes, iv)
-            write_file(output_path, plaintext)
-            print(f"Расшифровано: {args.input_file} -> {output_path}")
-            print(f"Режим: {mode.name.upper()}")
-
-    except ValueError as e:
-        print(f"Ошибка криптографии: {e}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Неожиданная ошибка: {e}", file=sys.stderr)
+        with open(args.input_file, "rb") as f:
+            while True:
+                chunk = f.read(8192)  # IO-2: chunks of 8 KB
+                if not chunk:
+                    break
+                hasher.update(chunk)
+    except OSError as e:
+        print(f"Ошибка чтения файла: {e}", file=sys.stderr)
         sys.exit(1)
 
+    digest_hex = hasher.hexdigest()
+    # CLI-4: format "HASH_VALUE  INPUT_FILE_PATH"
+    result = f"{digest_hex}  {args.input_file}\n"
+
+    if args.output:
+        try:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(result)
+            print(f"Хеш записан в {args.output}")
+        except OSError as e:
+            print(f"Ошибка записи: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print(result, end="")
 
 if __name__ == "__main__":
     main()
