@@ -252,23 +252,49 @@ def main() -> None:
             print(f"Неожиданная ошибка: {e}", file=sys.stderr)
             sys.exit(1)
 
+
 def main_dgst(args_list: list[str]) -> None:
+    """Handle `cryptocore dgst ...` command."""
     parser = argparse.ArgumentParser(
         prog="cryptocore dgst",
-        description="Вычислить хеш файла",
+        description="Вычислить хеш или HMAC файла",
     )
     parser.add_argument("--algorithm", required=True, choices=["sha256", "sha3-256"])
     parser.add_argument("--input", required=True, dest="input_file")
     parser.add_argument("--output", default=None)
+    parser.add_argument("--hmac", action="store_true", help="Вычислить HMAC")
+    parser.add_argument("--key", help="Ключ для HMAC (hex-строка)")
+    parser.add_argument("--verify", help="Файл с ожидаемым хешем/HMAC для проверки")
 
     args = parser.parse_args(args_list)
 
-    hasher = get_hasher(args.algorithm)
+    # CLI-2: --key is required when --hmac is used
+    if args.hmac:
+        if not args.key:
+            print("Ошибка: --key обязателен при использовании --hmac", file=sys.stderr)
+            sys.exit(1)
+        try:
+            key_bytes = bytes.fromhex(args.key)
+        except ValueError:
+            print("Ошибка: --key должен быть hex-строкой", file=sys.stderr)
+            sys.exit(1)
 
+        from src.mac.hmac import HMACStream
+        from src.hash.sha256 import SHA256
+        hasher = HMACStream(key_bytes, SHA256)
+        prefix = "HMAC"
+    else:
+        if args.key:
+            print("Предупреждение: --key игнорируется без --hmac", file=sys.stderr)
+        from src.hash import get_hasher
+        hasher = get_hasher(args.algorithm)
+        prefix = args.algorithm.upper()
+
+    # IO-1: Read in chunks
     try:
         with open(args.input_file, "rb") as f:
             while True:
-                chunk = f.read(8192)  # IO-2: chunks of 8 KB
+                chunk = f.read(8192)
                 if not chunk:
                     break
                 hasher.update(chunk)
@@ -277,14 +303,34 @@ def main_dgst(args_list: list[str]) -> None:
         sys.exit(1)
 
     digest_hex = hasher.hexdigest()
-    # CLI-4: format "HASH_VALUE  INPUT_FILE_PATH"
     result = f"{digest_hex}  {args.input_file}\n"
 
+    if args.verify:
+        try:
+            with open(args.verify, "r", encoding="utf-8") as f:
+                expected_line = f.read().strip()
+
+            # Flexible parsing: extract the first hex string
+            expected_digest = expected_line.split()[0].strip()
+
+            if expected_digest == digest_hex:
+                print("[OK] HMAC verification successful" if args.hmac else "[OK] Hash verification successful")
+                sys.exit(0)
+            else:
+                print(
+                    f"[ERROR] HMAC verification failed (expected {expected_digest}, got {digest_hex})" if args.hmac else "[ERROR] Hash mismatch",
+                    file=sys.stderr)
+                sys.exit(1)
+        except OSError as e:
+            print(f"Ошибка чтения файла проверки: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # Regular output
     if args.output:
         try:
             with open(args.output, "w", encoding="utf-8") as f:
                 f.write(result)
-            print(f"Хеш записан в {args.output}")
+            print(f"Записан {prefix} в {args.output}")
         except OSError as e:
             print(f"Ошибка записи: {e}", file=sys.stderr)
             sys.exit(1)

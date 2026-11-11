@@ -176,7 +176,51 @@ diff my_hash.txt system_hash.txt
 > ```powershell
 > Get-FileHash large_file.iso -Algorithm SHA256
 > ```
-> 
+
+### HMAC (аутентификация сообщений)
+
+Помимо обычных хешей, команда `dgst` поддерживает **HMAC-SHA256** (Hash-based Message Authentication Code) по RFC 2104. HMAC позволяет проверить не только целостность данных, но и их **подлинность** — только владелец ключа может сгенерировать корректный MAC.
+
+**Генерация HMAC:**
+
+```bash
+cryptocore dgst --algorithm sha256 --hmac --key 0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b --input message.txt
+```
+
+Вывод (формат `HMAC  FILE`):
+```text
+b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7  message.txt
+```
+
+**Проверка HMAC (`--verify`):**
+
+```bash
+# Сначала сохраняем HMAC
+cryptocore dgst --algorithm sha256 --hmac --key ... --input message.txt --output expected.hmac
+
+# Потом проверяем
+cryptocore dgst --algorithm sha256 --hmac --key ... --input message.txt --verify expected.hmac
+# → [OK] HMAC verification successful (exit code 0)
+```
+
+Если файл или ключ изменены:
+```text
+[ERROR] HMAC verification failed (expected ..., got ...)  (exit code 1)
+```
+
+**Свойства HMAC:**
+- **Длина ключа:** любая. Ключи > 64 байт хешируются, ключи < 64 байт дополняются нулями.
+- **Конструкция:** `HMAC(K, m) = H((K ⊕ opad) ∥ H((K ⊕ ipad) ∥ m))`, где `ipad = 0x36`, `opad = 0x5c`.
+- **Защита:** устойчив к *length extension attack* (в отличие от наивного `H(K ∥ m)`).
+- **Реализация:** `src/mac/hmac.py` — с нуля, по RFC 2104, поверх вашего SHA-256 из `src/hash/sha256.py`.
+
+**Тестовые векторы (RFC 4231):**
+
+| Key | Data | HMAC-SHA256 |
+|---|---|---|
+| `0b`×20 | `Hi There` | `b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7` |
+| `Jefe` | `what do ya want for nothing?` | `5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843` |
+
 ## Тестирование и верификация
 
 1. Запуск автоматических тестов
@@ -184,7 +228,6 @@ diff my_hash.txt system_hash.txt
 ```bash
     python -m pytest tests/ -v
    ```
-Покрывает: PKCS#7, ECB, CBC, CFB, OFB, CTR, реестр режимов, файловый I/O.
 
 2. Проверка полного цикла (Round-trip)
 Вы можете проверить, что файл после шифрования и последующего расшифрования полностью идентичен исходному:
@@ -324,10 +367,14 @@ python tools/generate_nist_data.py 10
     │   │   ├── __init__.py          # Реестр алгоритмов
     │   │   ├── sha256.py            # SHA-256 с нуля (FIPS 180-4)
     │   │   └── sha3_256.py          # SHA3-256 (через hashlib)
+    │   └── mac/
+    │       ├── __init__.py
+    │       └── hmac.py                # HMAC-SHA256 (RFC 2104)
     ├── tests/
     │   ├── __init__.py
     │   ├── test_crypto.py           # 122 теста (все режимы + padding + I/O)
     │   ├── test_csprng.py           # CSPRNG (Sprint 3)
+    │   ├── test_hmac.py             # RFC 4231 векторы + edge cases
     │   └── test_hash.py             # Хеши (Sprint 4)
     ├── tools/
     │   └── render_readme.py         # Скрипт для локального preview README
